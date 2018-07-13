@@ -1,0 +1,595 @@
+Online News Popularity
+# Data Source : UCI ML repository
+# https://archive.ics.uci.edu/ml/datasets/online+news+popularity
+
+##Description
+#This data-set summarizes a heterogeneous set of features about articles published by Mashable in a period of two years. The goal is to predict the number of shares in social networks (popularity).
+#Dataset : 39644 observations and 61 variables
+# Initially we understand the each variables characteristics and correlations.After that we applied feature selection using boruta algorithm.
+# We started with the parametric classification methods, logistic regression and Linear Discriminant Analysis (LDA). Also, we applied the following nonparametric classification methods to predict the popularity: k-Nearest Neighbors (kNN); Support Vector Machine (SVM); Adaptive Boosting (AdaBoost) and Random Forest. Finally, we compared the performances of all the classification methods and analyzed the top important features that affect the popularity.
+```{r}
+OnlineNewsPopularity <- read.csv("C:/Manipal - Final Project/OnlineNewsPopularity/OnlineNewsPopularity.csv")
+str(OnlineNewsPopularity)
+dim(OnlineNewsPopularity)
+```
+# 39,644 articles (observations) 
+# 61 attributes, including:
+#  Day of week published 
+# "Channel" or content area under which article was published ( social media, politics, business ,lifestyle etc.)
+#  Continuous response variable of total shares per publication
+
+```{r}
+### Divide all variables into 10 categories
+
+
+links=c('num_hrefs','num_self_hrefs','self_reference_min_shares','self_reference_max_shares',
+        'self_reference_avg_sharess')
+kw1 = c('kw_min_min','kw_max_min','kw_avg_min','kw_min_max','kw_max_max','kw_avg_max',
+     'kw_min_avg','kw_max_avg','kw_avg_avg')
+kw2 = c('num_keywords')
+kw3 = c('data_channel_is_lifestyle','data_channel_is_entertainment','data_channel_is_bus',
+        'data_channel_is_socmed','data_channel_is_tech','data_channel_is_world') #categorical
+other = c('LDA_00','LDA_01','LDA_02','LDA_03','LDA_04','url')
+Language=c('global_subjectivity','global_sentiment_polarity', 
+           'global_rate_positive_words','global_rate_negative_words',
+           'rate_positive_words','rate_negative_words',
+           'avg_positive_polarity','min_positive_polarity',
+           'max_positive_polarity','avg_negative_polarity',
+           'min_negative_polarity','max_negative_polarity',
+           'title_subjectivity', 'title_sentiment_polarity',
+           'abs_title_subjectivity', 'abs_title_sentiment_polarity')
+words=c('n_tokens_title','n_tokens_content','n_unique_tokens','n_non_stop_words',
+        'n_non_stop_unique_tokens','average_token_length')
+media=c('num_imgs','num_videos')
+time1=c('weekday_is_monday','weekday_is_tuesday','weekday_is_wednesday','weekday_is_thursday',
+        'weekday_is_friday','weekday_is_saturday') #categorical
+time2=c('weekday_is_sunday',"is_weekend") #categorical
+```
+
+```{r}
+###################### EDA #######################
+### Detect whether exist missing values in origin data
+anyNA(OnlineNewsPopularity) ### no missing
+```
+##Univariate Analysis 
+#We have to check which attributes of a article will affect its popularity, in other word, what kind of articles are attracting eyes from general public. There are 60 columns, including one dependent variable which is "shares" and 59 independent ones. We want to take a look at these 59 variables first by Exploratory Data Analyasis (EDA).
+```{r}
+library(psych)
+#describe(OnlineNewsPopularity)
+summary(OnlineNewsPopularity)
+```
+
+#EDA and Variables selection
+#In this section, we take a look and the whole dataset 
+# pander heavily builds on Pandoc, which should be pre-installed before trying to convert your reports to different formats.
+
+```{r}
+library(data.table)
+library(pander)
+rawdt<- OnlineNewsPopularity
+pander(as.list(paste('number of rows:', dim(rawdt)[1], sep  = ' ')))
+pander(as.list(paste('number of columns:', dim(rawdt)[2], sep  = ' ')))
+panderOptions('table.split.table', Inf)
+panderOptions('table.style', 'rmarkdown')
+#pandoc.table(cbind(colnames(rawdt), transpose(head(rawdt, 1)))) ## Let's take a look at a record.
+
+
+#Computing variable statistics
+library(moments)
+middt <- data.table(rawdt)
+setkey(middt)
+middt[, date :=  as.Date(substring(url, 21, 30))] ## We can extract the publishing date from the provided URL
+for (i in c(min(middt[, date]):max(middt[, date]))) ## Running thru the possible dates
+    {temp <- middt[date ==  i, .N, by = date] ## counting the daily output
+    middt[date ==  i, d_freq :=  temp[, 2, with = FALSE]]} ## pasting a new variable about the number of daily news supply
+middt[, url :=  NULL] # URL is a kind of ID so I remove.
+middt[, date :=  NULL] # date was only a temporary variable so I remove.
+pandoc.table(cbind(colnames(middt), sapply(middt, function(x) class(x)), transpose(round(head(middt, 5), 2)))) ## Let's take a fresh look at the last 5 records.
+st <- class('table')
+st <- rbind(st, sapply(middt, function(x) class(x))) ## adding variable class to variable statistics
+st <- rbind(st, sapply(middt, function(x) ifelse(sum(x ==  1, na.rm = TRUE) ==  sum(x, na.rm = TRUE), 'binary', ifelse(max(abs(x)) ==  1 & min(abs(x)) ==  0, 'rate', ifelse(sum(round(x, 2)) ==  sum(x), 'discrete', 'continuous'))))) ## adding possible variable type to variable statistics (not 100% sure, but it is ok for now)
+st <- rbind(st, summary(middt)) ## adding classic summary statistics to variable statistics
+st <- rbind(st, sapply(middt, function(x) ifelse(sum(x ==  1, na.rm = TRUE) ==  sum(x, na.rm = TRUE), NA, ifelse(max(abs(x)) ==  1 & min(abs(x)) ==  0, NA, sum(x < mean(x, na.rm = TRUE) - 3 * sd(x, na.rm = TRUE), na.rm = TRUE))))) ## computing and adding lower control level for discrete and continuous type variables to variable statistics (mean - 3 * SD)
+st <- rbind(st, sapply(middt, function(x) ifelse(sum(x ==  1, na.rm = TRUE) ==  sum(x, na.rm = TRUE), NA, ifelse(max(abs(x)) ==  1 & min(abs(x)) ==  0, NA, sum(x > mean(x, na.rm = TRUE) + 3 * sd(x, na.rm = TRUE), na.rm = TRUE))))) ## computing and adding upper control level for discrete and continuous type variables to variable statistics (mean + 3 * SD)
+st <- rbind(st, sapply(middt, function(x) round(skewness(x, na.rm = FALSE), 2))) ## adding skewness value to variable statistics
+st <- rbind(st, sapply(middt, function(x) ifelse(skewness(x, na.rm = FALSE) >=  12, 'extremly_right', ifelse(skewness(x, na.rm = FALSE) >=  3, 'strong_right', ifelse(skewness(x, na.rm = FALSE) >=  0, 'right', 'left'))))) ## categorizing skewness in variable statistics
+st <- rbind(st, sapply(middt, function(x) sum(is.na(x)))) ## adding number of NAs to variable statistics
+st <- rbind(st, sapply(middt, function(x) sum(x ==  0, na.rm = TRUE))) ## adding number of zeros to variable statistics
+st <- rbind(st, sapply(middt, function(x) sum(x < 0, na.rm = TRUE))) ## adding number of negative values to variable statistics
+st <- transpose(data.table(st)) ## pivoting by 90 degree
+st <- st[, -1, with = FALSE] 
+st <- cbind(colnames(middt), st) ## adding variable names as the first column
+names(st) <- c('Variable', 'Class', 'Possib_type', 'Min', '1st_Qu', 'Median', 'Mean', '3rd_Qu', 'Max', 'nLCL', 'nUCL', 'Skewness', 'Skewness2', 'NAs', 'Zeros', 'Neg_values') ## naming columns
+st[, Min :=  round(as.numeric(sub('Min.   :', '', Min)), 2)] ## removing superfluous text
+st[, `1st_Qu` :=  NULL] ## removing needless column (reason: narrowing table)
+st[, Median :=  NULL] ## removing needless column (reason: narrowing table)
+st[, Mean :=  round(as.numeric(sub('Mean   :', '', Mean)), 2)] ## removing superfluous text
+st[, `3rd_Qu` :=  NULL] ## removing needless column (reason: narrowing table)
+st[, Max :=  round(as.numeric(sub('Max.   :', '', Max)), 2)] ## removing superfluous text
+pandoc.table(st) ## Let's have a look at variable statistics.
+
+```
+# There are no NAs, but there are 1181 rows containing zeros in the  **n_tokens_content ** column, which has no sense (article without words), therefore I think these records may contain zero erroneously.
+
+## Let's see the binary variable statistics
+```{r}
+par(mfrow = c(2,2))
+enddt <- data.table(middt)
+pandoc.table(st[Possib_type ==  'binary', ]) ## selecting binary variables
+#for (i in st[Possib_type ==  'binary', Variable]) {barplot(table(enddt[, i, with = FALSE]), main = i, horiz = TRUE, space = c(0.01,0.01), col = c('blue', 'orange'))} ## plotting distribution
+## The binary variables seem ok, but two of them are superfluous.
+```
+```{r}
+par(mfrow = c(3,3))
+## Purging superfluous binary variables
+## Such as  **weekday_is_sunday ** and  **weekday_is_monday **.
+## Let's see the first 5 records and their corresponding values after deleting.
+enddt[, weekday_is_sunday :=  NULL] # this 'position' can be computed from 'is_weekend' and 'weekday_is_saturday'
+enddt[, weekday_is_monday :=  NULL] # this 'position' can be computed from 'weekday_is_tuesday' and 'weekday_is_wednesday' and 'weekday_is_thursday' and 'weekday_is_friday' and 'is_weekend'
+pandoc.table(cbind(colnames(enddt), sapply(enddt, function(x) class(x)), transpose(round(head(enddt, 5), 2)))) ## Let's see the last 5 records and their corresponding values.
+
+## Let's see the rating type variable statistics
+pandoc.table(st[Possib_type ==  'rate', ]) ## selecting rating variables
+for (i in st[Possib_type ==  'rate', Variable]) {hist(enddt[, i, with = FALSE][[1]], xlim = c(-1.3, 1.3), main = paste('Histogram of ', i, sep = ''), xlab = i)} ## plotting histograms
+## There are 3 of rating type variables which are situated between -1 and zero.
+## There is only 1 within -1 to 1 range, and the 8 are situated between 0 and 1.
+## On the other hand they seem ok.
+
+## Let's see the discrete type variable statistics
+pandoc.table(st[Possib_type ==  'discrete', ]) ## selecting discrete variables
+for (i in st[Possib_type ==  'discrete', Variable]) {hist(enddt[, i, with = FALSE][[1]], main = paste('Histogram of ', i, sep = ''), xlab = i)} ## plotting histograms
+## Some of them have strong right tail so I will taking logs of them. 
+## The label has strong right tail also, but I am going to classify it instead of taking logs. 
+
+## Let's see the continuous type variable statistics
+pandoc.table(st[Possib_type ==  'continuous', ]) ## selecting continuous variables
+for (i in st[Possib_type ==  'continuous', Variable]) {hist(enddt[, i, with = FALSE][[1]], main = paste('Histogram of ', i, sep = ''), xlab = i)}  ## plotting histograms
+##  **self_reference_avg_sharess ** has strong right tail, so I will taking log of it. 
+
+## Let's take logs of those discrete & continuous variables with strong right tail
+## Let's find those strongly right-skewed discrete and continuous variables
+pandoc.table(st[which(Skewness2 == 'strong_right' & Possib_type %in% c('discrete', 'continuous') & Variable != 'shares'), ]) ## Let's find those strongly right-skewed discrete and continuous variables
+```
+
+```{r}
+### Plot of target variable (shares)
+attach(OnlineNewsPopularity)
+summary(shares)
+par(mfrow=c(1,3))
+plot(shares,xlab="")
+boxplot(shares)
+hist(shares,prob=T)
+lines(density(shares),col="blue")
+```
+
+############## Classification ###################
+```{r}
+news=OnlineNewsPopularity[,-c(1,2)] 
+cato=c(12:17,30:37)      ### catogorical variables 
+y=ifelse(news$shares>1400,1,0) ### set sample median (1400) as treshold,1-popular,0-not popular 
+y=as.factor(y) 
+# In the univariate analysis,its clearly shows that the variables are not in the normalized form.
+#Scale() - Generating Z-Scores (Normalization)
+#Normally, to create z-scores (standardized scores) from a variable, you would subtract the mean of all data points from each individual data point, then divide those points by the standard deviation of all points. Again, this can be accomplished in one call using scale().
+
+#generate z-scores for variable A using the scale() function
+
+news_n=scale(news[,-c(59,cato)],center=T,scale=T)  ###center and scale data
+news1=data.frame(y,news[,cato],news_n)
+```
+
+
+#Correlation plot
+```{r}
+library(corrplot)
+corrplot(cor(news_n),method = 'circle')
+```
+#Positive correlations are displayed in blue and negative correlations in red color. Color intensity and the size of the circle are proportional to the correlation coefficients. In the right side of the correlogram, the legend color shows the correlation coefficients and the corresponding colors.
+
+```{r}
+library("PerformanceAnalytics")
+chart.Correlation(news[,words], histogram=TRUE, pch=19)
+```
+#In the above plot:
+
+#The distribution of each variable is shown on the diagonal.
+#On the bottom of the diagonal : the bivariate scatter plots with a fitted line are displayed
+#On the top of the diagonal : the value of the correlation plus the significance level as stars
+#Each significance level is associated to a symbol : p-values(0, 0.001, 0.01, 0.05, 0.1, 1) <=> symbols("***", "**", "*", ".", " ")
+
+# After evaluating all the univariate and correlation between variables.To do better model analysis,we are considering feature selection algorithm for selecting the dependent variables for prediction.
+
+### Feature selection
+#The Boruta algorithm is a wrapper built around the random forest classification algorithm. It tries to capture all the important, interesting features you might have in your dataset with respect to an outcome variable.The algorithm checks for each of your real features if they have higher importance. That is, whether the feature has a higher Z-score than the maximum Z-score of its shadow features than the best of the shadow features. If they do, it records this in a vector. These are called a hits. Next,it will continue with another iteration. After a predefined set of iterations, you will end up with a table of these hits.
+# Feature selection (5 Rounds)
+```{r}
+library(Boruta)
+set.seed(1)
+#doTrace = argument to 1 or 2, which allows you to get a report of the progress of the process.
+#ntree = to specify the number of variables that are randomly sampled as candidates at each split, while the latter is used to specify the number of trees you want to grow. With these arguments specified, the Random Forest classifier will achieve a convergence at minimal value of the out of bag error.
+#maxRuns =  increasing the maxRuns parameter if tentative features are left
+Boruta.Ozone=Boruta(y~.,data=news1, doTrace=2, ntree=50,maxRuns=15)  
+### Choose variables "confirmed" by model
+features=names(news1)[(which(Boruta.Ozone$finalDecision=="Confirmed"))]  
+news_1=news1[,c("y",features)]
+
+
+set.seed(1)
+Boruta.Ozone2=Boruta(y~.,data=news_1, doTrace=2, ntree=50,maxRuns=15)
+features2=names(news1)[(which(Boruta.Ozone2$finalDecision=="Confirmed"))]
+news_2=news1[,c("y",features2)]
+
+
+set.seed(1)
+Boruta.Ozone3=Boruta(y~.,data=news_2, doTrace=2, ntree=50,maxRuns=15)
+features3=names(news1)[(which(Boruta.Ozone3$finalDecision=="Confirmed"))]
+news_3=news1[,c("y",features3)]
+
+set.seed(1)
+Boruta.Ozone4=Boruta(y~.,data=news_3, doTrace=2, ntree=50,maxRuns=15)
+features4=names(news1)[(which(Boruta.Ozone4$finalDecision=="Confirmed"))]
+news_4=news1[,c("y",features4)]
+
+set.seed(1)
+Boruta.Ozone5=Boruta(y~.,data=news_4, doTrace=2, ntree=50,maxRuns=15)
+features5=names(news1)[(which(Boruta.Ozone5$finalDecision=="Confirmed"))]
+news_5=news1[,c("y",features5)]
+getSelectedAttributes(Boruta.Ozone5)
+attStats(Boruta.Ozone5)
+plot(Boruta.Ozone5)
+
+### Variables(predictors) we decided to use finally
+final_features=c("y",kw3,"is_weekend","n_tokens_title", "n_non_stop_unique_tokens",
+                 "num_hrefs","num_self_hrefs","num_imgs","num_videos",
+                 "average_token_length","num_keywords","kw_avg_min",
+                 "kw_avg_max","kw_avg_avg","self_reference_avg_sharess",
+                 "LDA_00","LDA_01","LDA_02")
+
+### The processed data we have, including 39644 observations, 22 predictors and 1 response
+news1=news1[,final_features]
+```
+
+
+```{r}
+### Divide data into train set and test set (train 90% /test 10%)
+
+n=dim(news1)
+set.seed(1)
+train_index=sample(n[1],floor(n[1]*0.90),replace=F)
+test_index=seq(1:n[1])[-train_index]
+news.train=news1[train_index,]
+news.test=news1[test_index,]
+
+## Cross validation for KNN classification
+### Function of 5-folds cross validation
+train.fold=list()
+test.fold=list()
+l=floor(nrow(news.train)/5)
+for(i in 1:5){
+    test.fold[[i]]=news.train[((i-1)*l+1):(i*l),]
+    train.fold[[i]]=news.train[-(((i-1)*l+1):(i*l)),]
+}
+```
+## Confusion matrix
+#accuracy = (correctly predicted class / total testing class) × 100% OR,
+#The accuracy can be defined as the percentage of correctly classified instances (TP + TN)/(TP + TN + FP + FN). where TP, FN, FP and TN represent the number of true positives, false negatives, false positives and true negatives, respectively.
+#also you can use standard performance measures:
+#Sensitivity = TP / TP + FN
+#Specificity = TN / TN + FP
+#Precision = TP / TP + FP
+#True-Positive Rate = TP / TP + FN
+#False-Positive Rate = FP / FP + TN
+#True-Negative Rate = TN / TN + FP
+#False-Negative Rate = FN / FN + TP
+
+```{r}
+library(ggplot2)
+### Function of accuracy
+accuracy=function(table){
+  a.rate=vector()
+  a.rate[1]=(table[1,1]+table[2,2])/sum(table)
+  a.rate[2]=table[2,2]/(table[2,2]+table[1,2])
+  a.rate[3]=table[1,1]/(table[1,1]+table[2,1])
+  names(a.rate)=c("Accuracy","Tp rate","Tn rate")
+  return(a.rate)
+}
+```
+### Method1: logistic classification
+#Logistic regression is used to describe data and to explain the relationship between one dependent binary variable and one or more nominal, ordinal, interval or ratio-level independent variables.
+```{r}
+
+mod0=glm(y~.,data = news.train, family=binomial)
+mod0
+
+t0=table(ifelse(predict(mod0,news.test[,-1],type="response")>0.5,1,0),news.test[,1])
+t0
+accuracy(t0)
+
+```
+#Inference: Here we got the accuracy of 0.6335435 
+
+
+### Method2: LDA classification 
+#Linear Discriminant Analysis (LDA) is most commonly used as dimensionality reduction technique in the pre-processing step for pattern-classification and machine learning applications.
+
+```{r}
+library(MASS)
+### Use moment to estimate the mean and variance
+mod1_1=lda(y~.,data=news.train,prior=c(0.5,0.5))
+t1_1=table(predict(mod1_1,news.test[,-1])$class,news.test[,1])
+accuracy(t1_1)
+
+### Illustrate
+Means=mod1_1$means
+Means_0=Means[1,]
+Means_1=Means[2,]
+
+### Plot
+plot(Means_0,col="blue",pch=16,type="b",lty=3,
+     main="Comparing the Sample Means of Two Classes",xlab="Features",ylab="Sample Means after Scaling",
+     xlim=c(1,23))
+points(Means_1,col="red",pch=17,type="b",lty=1)
+abline(v=22,lty=3)
+abline(v=18,lty=3)
+abline(v=15,lty=3)
+abline(v=12,lty=3)
+abline(v=10,lty=3)
+abline(v=6,lty=3)
+legend("topright",legend=c("not popular","popular"),col=c("blue","red"),lty=c(3,1))
+text(x=6,y=0.13,label=colnames(Means)[6],cex=0.8,font=2)
+text(x=10,y=-0.1,label=colnames(Means)[10],cex=0.8,font=2)
+text(x=12,y=0.09,label=colnames(Means)[12],cex=0.8,font=2)
+text(x=15,y=-0.09,label=colnames(Means)[15],cex=0.8,font=2)
+text(x=18,y=0.18,label=colnames(Means)[18],cex=0.8,font=2)
+text(x=22,y=0.18,label=colnames(Means)[22],cex=0.8,font=2)
+colnames(Means)[c(6,10,12,15,18,22)]
+
+### Use robust estimates based on t distribution
+mod1_2=lda(y~.,data=news.train,prior=c(0.5,0.5),method="t")
+t1_2=table(predict(mod1_2,news.test[,-1])$class,news.test[,1])
+accuracy(t1_2)
+
+```
+
+# Inference: Using the method t in the LDA model,we got the accuracy of 0.6327869.
+
+
+### Method3: KNN classificaion
+# The KNN or k-nearest neighbors algorithm is one of the simplest machine learning algorithms and is an example of instance-based learning, where new data are classified based on stored, labeled instances.
+
+### Cross validation to choose best K from(1,5,10,50,100,200,300,400,500,600)
+```{r}
+library(FNN)
+cv.knn=vector()
+j=1
+for(k in c(1,5,10,50,100,200,300,400,500,600)){
+  mod=list()
+  temp=vector()
+  for(i in 1:5){
+    mod[[i]]=knn(train.fold[[i]][,-1],test.fold[[i]][,-1],train.fold[[1]][,1],prob=T,k)
+    t=table(mod[[i]],test.fold[[i]][,1])
+    temp[i]=(t[1,2]+t[2,1])/sum(t)
+  }
+  cv.knn[j]=mean(temp)
+  j=j+1
+}
+cv.knn ### return cv result(error rate), choose the smallest one
+
+```
+# Inference:The above results the smallest error rate that belongs to corresponding k was taken for further model evaluation.
+#Here it is error rate 0.3971128 belongs to k = 300
+
+### Plot the result of cross validation to choose the k
+```{r}
+color=colorRampPalette(c("red","royalblue"))
+plot(c(1:10),cv.knn,main="Cross-Validation on kNN",xlab="k",ylab="Validation Error",
+     pch=20,type="b",col=color(10),cex=2,xaxt="n",cex.lab=1.2)
+axis(side=1,at=c(1:10),label=c("1","5","10","50","100","200","300","400","500","600"))
+```
+
+### Use best K to do classification
+```{r}
+library(FNN)
+mod2=knn(news.train[,-1],test=news.test[,-1],news.train[,1],prob=T,k=300)
+t2=table(mod2,news.test[,1])
+accuracy(t2)
+```
+#Inference: After seeing the cross validation plot,its clearly understand that the k value had sudden drop @ 200 and constant line goes after k = 300 . So we take k=300 for our model which results 0.6343001 accuracy rate.
+
+### Method4: SVM classification
+#A Support Vector Machine (SVM) is a discriminative classifier formally defined by a separating hyperplane. In other words, given labeled training data (supervised learning), the algorithm outputs an optimal hyperplane which categorizes new examples.Here we are process svm with differentt cost parameters and find the best cost with high accuracy rate.
+
+```{r}
+library(e1071)
+library(caret)
+Mod3=list()
+t3=list()
+ac.svm=vector()
+j=1
+### Process Svm with different parameters(Cost=(0.1,1,10,100))
+for(i in c(0.1,1,10)){
+set.seed(3233)
+Mod3[[j]]=svm(y~.,data=news.train,type="C-classification",kernel="radial",cost=i,torlerance=0.1)
+t3[[j]]=table(predict(Mod3[[j]],news.test[,-1],type="class"),news.test[,1])
+ac.svm[j]=accuracy(t3[[j]])
+j=j+1
+}
+ac.svm
+
+### Choose the model have the highest accuracy(cost=10)
+mod3=Mod3[[3]]
+mod3
+```
+#Inference: Different parameters of cost has been analysed in this svm process to find the best accuracy rate of 0.6353090 @ cost = 10.But it takes too long time to get the result.
+
+
+### Method5: Adaboost classification
+
+# Ensemble Method - AdaBoost was the first really successful boosting algorithm developed for binary classification. It is the best starting point for understanding boosting.The algorithm works and how to use it for predictive modeling problems. 
+```{r}
+library(adabag)
+Mod4=list()
+t4=list()
+ac.ada=vector()
+j=1
+### Process Adaboost with different iterations(10,20,50,100)
+for(i in c(10,20,50,100)){
+  set.seed(1)
+  Mod4[[j]]=boosting(y~.,data=news.train,boos=T,mfinal=i)
+  t4[[j]]=table(predict(Mod4[[j]],news.test[,-1])$class,news.test[,1])
+  ac.ada[j]=accuracy(t4[[j]])
+  j=j+1
+}
+ac.ada ### Choose the model have the highest accuracy (ntree=100)
+mod4=Mod4[[4]]
+
+```
+#Inference :In adaboost ,after running the model with different iterations.The highest accuracy we get from the ntree = 100.This will be used to run the model to get the best accuracy rate.
+
+
+
+### Method6: Random Forest classification
+
+#Random forests or random decision forests are an ensemble learning method for classification, regression and other tasks, that operate by constructing a multitude of decision trees at training time and outputting the class that is the mode of the classes (classification) or mean prediction (regression) of the individual trees. Random decision forests correct for decision trees' habit of overfitting to their training set
+```{r}
+library(randomForest)
+cv.rf=vector()
+j=1
+for(k in c(10,20,50,100,200,300)){
+  mod=list()
+  temp=vector()
+  for(i in 1:5){
+    mod[[i]]=randomForest(y~.,data=train.fold[[i]],importance=T,ntrees=k)
+    t=table(predict(mod[[i]],test.fold[[i]][,-1],type="class"),test.fold[[i]][,1])
+    temp[i]=(t[1,2]+t[2,1])/sum(t)
+  }
+  cv.rf[j]=mean(temp)
+  j=j+1
+}
+cv.rf ### return cv result(error rate), choose the smallest one
+```
+### Randomforest - Plot for ntree
+
+```{r}
+plot(c(1:6),cv.rf,main="Cross-Validation on RF",xlab="n.trees",ylab="Validation Error",
+     pch=20,type="b",col=color(6),cex=2,xaxt="n",cex.lab=1.2)
+axis(side=1,at=c(1:6),label=c("10","20","50","100","200","300"))
+```
+
+### Inference - best nTree was selected to do model from the above cross validation on RF plot.
+
+# Randomforest - Classification
+```{r}
+set.seed(1)
+mod5=randomForest(y~.,data=news.train,importance=T,ntree=200)
+t5=table(predict(mod5,news.test[,-1],type="class"),news.test[,1])
+accuracy(t5)
+
+```
+#Inference : After running the model with best ntree results Accuracy 0.6585120 .
+
+##importance of variables based on random forest prediction
+```{r}
+varImpPlot(mod5,sort=T,main="Relative Importance of Each Variable",pch=20)
+```
+# The above plot clearly gives us the variables importance.
+
+### ROC curve and AUC value 
+### Plot ROC curve of all models
+#Using the best interation,ntree,cost,k values are considered for evaluating the model & to plot the ROC
+```{r}
+library(ROCR)
+label.test=news.test[,1]
+
+#Logistic Regression
+prob0=predict(mod0,news.test[,-1],type="response")
+pred0=prediction(prob0,label.test)
+perf0=performance(pred0,measure = "tpr",x.measure="fpr")
+plot(perf0,lty=2,lwd=2,xlim=c(0.035,0.965),ylim=c(0.035,0.965),main="ROC plot for Logistic ")
+abline(coef=c(0,1),lwd=1)
+
+#LDA
+prob1=predict(mod1_1,news.test[,-1],type="prob")$posterior[,2]
+pred1=prediction(prob1,label.test)
+perf1=performance(pred1,measure = "tpr",x.measure="fpr")
+plot(perf1,lty=2,lwd=2,xlim=c(0.035,0.965),ylim=c(0.035,0.965),main="ROC plot for LDA")
+abline(coef=c(0,1),lwd=1)
+
+#KNN
+prob2=attr(mod2,"prob")
+prob2=2*ifelse(mod2==0, 1-prob2, prob2)-1 
+pred2=prediction(prob2, label.test)
+perf2=performance(pred2, measure="tpr",x.measure="fpr") 
+plot(perf2,lty=2,lwd=2,xlim=c(0.035,0.965),ylim=c(0.035,0.965),main="ROC plot for KNN") # ROC
+abline(coef=c(0,1),lwd=1)
+
+#SVM
+mod3_ba=svm(y~.,data=news.train,type="C-classification",kernel="radial",cost=10,torlerance=0.1,probability=T)
+prob3=attr(predict(mod3_ba,news.test[,-1], probability=T),"probabilities")[,2]
+pred3=prediction(prob3, label.test)
+perf3=performance(pred3, measure = "tpr", x.measure = "fpr") 
+plot(perf3,lty=2,lwd=2,xlim=c(0.035,0.965),ylim=c(0.035,0.965),main="ROC plot for SVM") # ROC
+abline(coef=c(0,1),lwd=1)
+
+#Adaboost
+prob4 <- predict(mod4,news.test[,-1],type="prob")$prob[,2]
+pred4 <- prediction(prob4, label.test)
+perf4 <- performance(pred4, measure = "tpr", x.measure = "fpr") 
+plot(perf4,lty=2,lwd=2,xlim=c(0.035,0.965),ylim=c(0.035,0.965),main="ROC plot for ADAboost") # ROC
+abline(coef=c(0,1),lwd=1)
+
+#Randomforest
+prob5=predict(mod5,news.test[,-1],type="prob")[,2]
+pred5=prediction(prob5,label.test)
+perf5=performance(pred5,measure = "tpr",x.measure="fpr") 
+plot(perf5,lty=2,lwd=2,xlim=c(0.035,0.965),ylim=c(0.035,0.965),main="ROC plot for RadomForest") # ROC
+abline(coef=c(0,1),lwd=1)
+
+###Calculate AUC for all the models
+AUC=vector()
+AUC[1]=performance(pred0,"auc")@y.values
+AUC[2]=performance(pred1,"auc")@y.values
+AUC[3]=performance(pred2,"auc")@y.values
+AUC[4]=performance(pred3,"auc")@y.values
+AUC[5]=performance(pred4,"auc")@y.values
+AUC[6]=performance(pred5,"auc")@y.values
+AUC
+```
+# Inference : The Accuracy and AUC values for all the models. 
+
+#MODEL	              ACCURACY	AUC
+#Logistic Regression	0.63354	0.68544
+#LDA	                0.63279	0.68172
+#KNN	                0.63430	0.69305
+#SVM	                0.64943	0.70576
+#Adaboost`	          0.65044	0.70423
+#Randomforest`	      0.65851	0.71470
+
+
+###Compare ROC curve of best model (RANDAM FOREST) and worst(LDA)
+```{r}
+
+prob5=predict(mod5,news.test[,-1],type="prob")[,2]
+pred5=prediction(prob5,label.test)
+perf5=performance(pred5,measure = "tpr",x.measure="fpr") 
+plot(perf5,lty=1,lwd=2,xlim=c(0.035,0.965),ylim=c(0.035,0.965),main="ROC plot for Best and Worst Model") # ROC
+abline(coef=c(0,1),lwd=1)
+par(new=T)
+
+prob1=predict(mod1_1,news.test[,-1],type="prob")$posterior[,2]
+pred1=prediction(prob1,label.test)
+perf1=performance(pred1,measure = "tpr",x.measure="fpr")
+plot(perf1,lty=2,lwd=2,xlim=c(0.035,0.965),ylim=c(0.035,0.965))
+```
+####Inference
+#The ROC curve is created by plotting the true positive rate (TPR) against the false positive rate (FPR) at various threshold settings & various models ( Randomforest,SVM,LDA,KNN,Logistic regression and Adaboost).Here we finally got the best ROC curve in the Random forest model compared with the worst ROC plot of LDA.Clearly understand that the Accuracy (66%) & Area under the curve for Random forest (AUC = 0.71) is higher compared to the worst model LDA (Accuracy = 63% & AUC = 0.68). 
+
+#Conclusion:
+
+#We started with the parametric classification methods, logistic regression and Linear Discriminant Analysis (LDA). Also, we applied the following nonparametric classification methods to predict the popularity: k-Nearest Neighbors (kNN); Support Vector Machine (SVM); Adaptive Boosting (AdaBoost) and Random Forest. Finally, we compared the performances of all the classification methods and analyzed the top important features that affect the popularity.
+
+#We applied feature selection after data standardization, and proved that very little prediction accuracy is sacrificed. Overall, all the models had prediction accuracy on the test set between 63% to 66%, while Random Forest had the best predicting performance. AdaBoost and Random Forest provided balanced true positive and true negative rates, thus they would have larger AUC values. However, in real life, people may pursue specific high true negative rate. In this case, SVM with larger cost on soft margin was recommended. On the other hand, LDA with "t" estimating method and SVM with smaller cost turned out to hold high true positive rate. Nevertheless, our large data set considered, SVM was not recommended because of the long running time.
+
+#Above all We also analyzed the reason for an online news article of being popular based on the importance of variables from the model. According to our study, social media and technology news tended to be more popular than those in categories of lifestyle, entertainment, business and world. Moreover, publishing news on weekends is a good idea. One should also include more links, images and keywords in the article to gain popularity.  
+
+
