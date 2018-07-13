@@ -1,0 +1,180 @@
+## Predicting online news popularity  by optimising neural network
+
+# In the previous machine learning analysis based on various models we got the accuracy of 65% .To optimise the model we used               Feature selection & transformation                                Model parameter optimisation
+
+# In order to improve the accuracy of the prediction of this dataset.Let us focus on parameter optimisation using the power of caret package and model parameter optimisation used by hyperparameter optimisation.
+
+#Neural Networks Hyperparameter Search
+# nnet package -  it uses the often-called vanilla neural net (a.k.a the single layer back-propagation network or single layer perceptron) and is simpler to tune hyperparameters compared to other more complicated neural networks. In this method, you don't need to determine the number of layers as it has only one. What you need to do is to choose the size of the neurons in the hidden layer.
+
+#we should try to optimise the regularisation parameter. nnet has a parameter called decay for regularisation. In short, regularisation prevent over-fitting by penalising over-fitted training models.
+
+#We will set hyperparameter ranges for size and decay for nnet optimisation.
+
+
+```{r}
+OnlineNewsPopularity <- read.csv("C:/Manipal - Final Project/OnlineNewsPopularity/OnlineNewsPopularity.csv")
+str(OnlineNewsPopularity)
+library(caret)
+library(nnet)
+library(e1071)
+library(NeuralNetTools)
+library(doParallel)
+library(ROCR)
+```
+#  Assigning factor to response variable
+```{r}
+OnlineNewsPopularity$Popularity <- as.factor(ifelse(OnlineNewsPopularity$shares >= 1400, "popular", "unpopular"))
+OnlineNewsPopularity1 <- OnlineNewsPopularity[, -c(1, 2, 61)]
+```
+
+#Split the dataset
+```{r}
+set.seed(1000)
+inTrain <- createDataPartition(OnlineNewsPopularity1$Popularity, p=0.7, list=F)
+train <- OnlineNewsPopularity1[inTrain, ]
+test <- OnlineNewsPopularity1[-inTrain, ]
+```
+#### nnet model
+
+# trainControl() - Using cross validated resampling method 'cv',Number of fold = 10,classProbs a logical; should class probabilities be computed for classification models (along with predicted values) in each resample.preProcOptions.A list of options to pass to preProcess. The type of pre-processing (e.g. center, scaling etc) is passed in via the preProc option in train.
+
+# train() - set the sampling methods with the trainControl function and pass it as the trControl parameter in the train function. I defined the tuneGrid as 3 size (1,5,10)and 3 decay (0,0.001,0.1)options. 
+```{r}
+library(devtools)
+set.seed(1000)
+# Set up Parallel Computing
+cl <- makeCluster(4)
+registerDoParallel(cl)
+# Train with caret
+numFolds <- trainControl(method = 'cv', number = 10, classProbs = TRUE, verboseIter = TRUE, preProcOptions = list(thresh = 0.75, ICAcomp = 3, k = 5))
+
+model_nnet<- train(Popularity~., data=train, method='nnet', trace=F,
+                   preProcess = c('center', 'scale'), trControl = numFolds, 
+                   tuneGrid=expand.grid(.size=c(1,5,10), .decay=c(0,0.001,0.1)))
+
+# Plot model and predict
+plotnet(model_nnet)
+train_pred <- predict(model_nnet, newdata=train, type="raw")
+test_pred <- predict(model_nnet, newdata=test, type="raw")
+```
+#Inference:The caret package will conduct the accuracy search to find the best combo.Finally we got the aggregate results for selecting the tuning parameters for the model were size = 1 and decay = 0.1 .
+#We visulaize the plotnet from Neuralnettools
+
+
+## Confusion matrix - to evaluate the model
+```{r}
+evaluate <- function(pred, actual){
+  tab <- table(pred, actual$Popularity)
+  tp <- tab[1,1]
+  tn <- tab[2,2]
+  fp <- tab[2,1]
+  fn <- tab[1,2]
+  accuracy <- (tp + tn)/(tp + tn + fp + fn)
+  precision <- tp/(tp+fp)
+  recall <- tp/(tp + fn)
+  F1 <- 2*(precision*recall)/(precision+recall)
+  
+  actual_label <- ifelse(actual$Popularity=='popular', 1, 0)
+  pred_label <- ifelse(pred=='popular', 1, 0)
+  pred_OCR= ROCR::prediction(pred_label, actual_label)
+  perf = performance(pred_OCR, 'tpr', 'fpr')
+  plot(perf)
+  AUC <- as.numeric(performance(pred_OCR, "auc")@y.values)
+  print("Prediction Evaluation Outcome")
+  eval <- as.data.frame(cbind(round(accuracy, 2), round(precision, 2), round(recall, 2), round(F1, 2), round(AUC, 2)))
+  colnames(eval) = c('accuracy','precision','recall','F1','AUC')
+  print(eval)
+}
+
+evaluate(train_pred, train)
+evaluate(test_pred, test)
+
+# Confusion Matrix from caret package for evaluation
+# Only for accuracy
+confusionMatrix(train_pred, train$Popularity)$overall[1]
+confusionMatrix(test_pred, test$Popularity)$overall[1]
+# confusion matrix and all the metrics
+confusionMatrix(train_pred, train$Popularity)
+confusionMatrix(test_pred, test$Popularity)
+```
+#Performance metrics
+```{r}
+evaluate(train_pred, train)
+evaluate(test_pred, test)
+```
+#Inference : From the above model we understand that the accuracy of the model is 0.66 without any optimisation.
+
+
+#Comparing the optimised result with default NN model
+# Lets first do the default NN model without any optimisation. 
+```{r}
+model_default <- nnet(Popularity~., data=train, size=1)
+plotnet(model_default)
+
+train_pred_default <- predict(model_default, newdata=train, type="class")
+test_pred_default <- predict(model_default, newdata=test, type="class")
+
+evaluate(train_pred_default, train)
+evaluate(test_pred_default, test)
+```
+# Here we got the accuracy of 53% 
+#Normalize the data for NN model -  The nnet package generally performs fine without normalisation unless you have features in completely different scale. Normalisation is usually recommended for Neural Networks for better accuracy and faster training speed.
+#nnet takes factor and numeric values as features. In the first example, all field types are numeric. Here, I converted categorical variables into factors and normalised other numeric fields.
+```{r}
+# Normalising data
+index <- c(12:17, 30:37, 59)
+colnames(OnlineNewsPopularity1[,index]) # checking the selected columns by index
+tmp_df1 <- as.data.frame(scale(OnlineNewsPopularity1[, -index]))
+tmp_df2 <- lapply(OnlineNewsPopularity1[, index], as.factor)
+shares_norm <- cbind(tmp_df2, tmp_df1)
+
+# create training and testing set. Use the partition created above
+set.seed(1000)
+inTrain <- createDataPartition(OnlineNewsPopularity1$Popularity, p=0.7, list=F)
+train_norm <- shares_norm[inTrain, ]
+test_norm <- shares_norm[-inTrain, ]
+
+# train & predict
+set.seed(1000)
+cl <- makeCluster(4)
+registerDoParallel(cl)
+numFolds <- trainControl(method = 'cv', number = 10, classProbs = TRUE, verboseIter = TRUE,
+                         preProcOptions = list(thresh = 0.75, ICAcomp = 3, k = 5))
+
+model_nnet_norm <- train(Popularity~., data=train_norm, method='nnet', trace=F,
+                         preProcess = c('center', 'scale'), trControl = numFolds, 
+                         tuneGrid=expand.grid(.size=c(1,5,10), .decay=c(0,0.001,0.1)))
+
+model_nnet_norm # The final values used for the model were size = 1 and decay = 0.
+
+train_pred_norm <- predict(model_nnet_norm, newdata=train_norm, type="raw")
+test_pred_norm <- predict(model_nnet_norm, newdata=test_norm, type="raw")
+
+evaluate(train_pred_norm, train_norm)
+evaluate(test_pred_norm, test_norm)
+```
+#Testing accuracy is slightly worse (0.65). But, overall it is similar. I think it is still good to test on the normalised dataset when you are modelling with neural networks. Normalised data usually give us a different model. In this case, the final values used for the model were size = 1 and decay = 0.
+
+#For better accuracy let us Change the hyperparameter range from size(1,5,10) to (1,2,3,4).Because 1 became best hyperparamtere in previous model run.5 neuron was probably overfitting.1 neuron is too simple.Lets check further by setting size range to (1,2,3,4)
+
+```{r}
+set.seed(1000)
+cl <- makeCluster(4)
+registerDoParallel(cl)
+numFolds <- trainControl(method = 'cv', number = 10, classProbs = TRUE, verboseIter = TRUE,
+                         preProcOptions = list(thresh = 0.75, ICAcomp = 3, k = 5))
+
+model_nnet<- train(Popularity~., data=train, method='nnet', trace=F,
+                   preProcess = c('center', 'scale'), trControl = numFolds, 
+                   tuneGrid=expand.grid(.size=c(1,2,3,4), .decay=c(0.001,0.01,0.1)))
+model_nnet 
+plotnet(model_nnet)
+
+train_pred <- predict(model_nnet, newdata=train, type="raw")
+test_pred <- predict(model_nnet, newdata=test, type="raw")
+
+evaluate(train_pred, train)
+evaluate(test_pred, test)
+```
+# Conclusion : Finally we got the better accuracy 67% using the best hyperparameter tuned out size =4 and decay =0.1.
